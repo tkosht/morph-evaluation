@@ -17,3 +17,4 @@ numba
 pudb
 gensim
 flake8
+sentencepiece

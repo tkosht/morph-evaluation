@@ -1,19 +1,35 @@
 import numpy
 import pathlib
-try: import MeCab
-except: MeCab = None
+
+try:
+    import MeCab
+except Exception:
+    MeCab = None
+
 try:
     import janome.tokenizer
     import janome.analyzer
     import janome.charfilter
     import janome.tokenfilter
-except: janome = None
+except Exception:
+    janome = None
+
 try:
     import sudachipy.dictionary
     import sudachipy.tokenizer
-except: sudachipy = None
-try: import nagisa
-except: nagisa = None
+except Exception:
+    sudachipy = None
+
+try:
+    import nagisa
+except Exception:
+    nagisa = None
+
+try:
+    import sentencepiece as spm
+except Exception:
+    spm = None
+
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 
 
@@ -117,7 +133,8 @@ class JpTokenizerMeCab(JpTokenizer):
     def __init__(self):
         self.dicdir = ("/usr/lib/x86_64-linux-gnu/mecab/dic"
                        "/mecab-ipadic-neologd")
-        self.tokenizer = MeCab.Tagger(f"-O chasen -d {self.dicdir}")
+        self.taggerstr = f"-O chasen -d {self.dicdir}"
+        self.tokenizer = MeCab.Tagger(self.taggerstr)
 
     def tokenize(self, line):
         sentence = []
@@ -131,6 +148,17 @@ class JpTokenizerMeCab(JpTokenizer):
             if pos not in g_stop_poses:
                 sentence.append(word)
         return sentence
+
+    def __getstate__(self):
+        state = {
+            "dicdir": self.dicdir,
+            "taggerstr": self.taggerstr,
+        }
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.tokenizer = MeCab.Tagger(self.taggerstr)
 
 
 class JpTokenizerJanome(JpTokenizer):
@@ -151,8 +179,8 @@ class JpTokenizerJanome(JpTokenizer):
 class JpTokenizerSudachi(JpTokenizer):
     def __init__(self):
         self.toker = sudachipy.dictionary.Dictionary().create()
-        self.mode = sudachipy.tokenizer.Tokenizer.SplitMode.B
-        # self.mode = sudachipy.tokenizer.Tokenizer.SplitMode.C
+        # self.mode = sudachipy.tokenizer.Tokenizer.SplitMode.B
+        self.mode = sudachipy.tokenizer.Tokenizer.SplitMode.C
 
     def tokenize(self, line):
         sentence = []
@@ -166,6 +194,55 @@ class JpTokenizerNagisa(JpTokenizer):
     def tokenize(self, line):
         tagged = nagisa.filter(line, filter_postags=g_stop_poses)
         return tagged.words
+
+
+class JpTokenizerSentencePiece(JpTokenizer):
+    def __init__(self,
+                 input_txt="wk/sp.txt",
+                 model_prefix="wk/sp",
+                 vocab_size=2000):
+
+        self.input_txt = input_txt
+        self.model_prefix = model_prefix
+        self.vocab_size = vocab_size
+        self.model_file = f"{self.model_prefix}.model"
+        self.sp = None
+
+    def fit(self, X, y, **kwargs):
+        pathlib.Path(self.input_txt).parent.mkdir(parents=True, exist_ok=True)
+        with open(self.input_txt, "w", encoding="utf-8") as f:
+            for doc in X:
+                f.writelines(doc)
+        param_str = f"""--input={self.input_txt}
+                     --model_prefix={self.model_prefix}
+                     --vocab_size={self.vocab_size}
+                     """
+        param_str = param_str.replace("\n", "")
+        spm.SentencePieceTrainer.train(param_str)
+        self._load_model()
+        return self
+
+    def _load_model(self):
+        sp = spm.SentencePieceProcessor()
+        sp.Load(self.model_file)
+        self.sp = sp
+
+    def tokenize(self, line):
+        pieces = self.sp.encode_as_pieces(line)
+        return pieces
+
+    def __getstate__(self):
+        state = {
+            "input_txt": self.input_txt,
+            "model_prefix": self.model_prefix,
+            "vocab_size": self.vocab_size,
+            "model_file": self.model_file,
+        }
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._load_model()
 
 
 class SparsetoDense(Transer):
@@ -224,6 +301,7 @@ if __name__ == '__main__':
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.decomposition import PCA   # , KernelPCA
     from sklearn.metrics import accuracy_score
+    import joblib
 
     ldccset = DatasetLdcc()
     ldccset.load()
@@ -233,10 +311,12 @@ if __name__ == '__main__':
         tokenizers.append(JpTokenizerMeCab())
     if janome is not None:
         tokenizers.append(JpTokenizerJanome())
-    if sudachipy is not None:
-        tokenizers.append(JpTokenizerSudachi())
-    if nagisa is not None:
-        tokenizers.append(JpTokenizerNagisa())
+#     if sudachipy is not None:
+#         tokenizers.append(JpTokenizerSudachi())
+#     if nagisa is not None:
+#         tokenizers.append(JpTokenizerNagisa())
+    if spm is not None:
+        tokenizers.append(JpTokenizerSentencePiece(vocab_size=5000))
 
     print("tokenizer, train_acc, valid_acc, elapsed_time, cpu_time")
     for _ in range(10):
@@ -259,7 +339,8 @@ if __name__ == '__main__':
                         )
             lgbmclf = lightgbm.LGBMClassifier(
                         objective="softmax",
-                        num_class=len(ldccset.labelset)
+                        num_class=len(ldccset.labelset),
+                        importance_type="gain",
                         )
             pipe = Pipeline(steps=[
                 ("tokenizer", tokener),
@@ -273,8 +354,12 @@ if __name__ == '__main__':
             tcs = time.process_time()
 
             pipe.fit(X_train, y_train)
+
+            # predict trainset
             p = pipe.predict(X_train)
             train_acc = accuracy_score(y_train, p)
+
+            # predict validset
             p = pipe.predict(X_valid)
             valid_acc = accuracy_score(y_valid, p)
 
@@ -287,5 +372,15 @@ if __name__ == '__main__':
             print(f"{tokener.__class__.__name__}, "
                   f"{train_acc}, {valid_acc}, "
                   f"{elapsed_time}, {cpu_time}")
+
+            # save model
+            pathlib.Path("./model").mkdir(parents=True, exist_ok=True)
+            print(f"Saving model {tokener.__class__.__name__.lower()} ...")
+            pipe_file = f"model/pipe-{tokener.__class__.__name__.lower()}.gz"
+            joblib.dump(pipe, pipe_file, compress=("gzip", 3))
+            # joblib.dump(pipe, f"model/pipe.gz", compress=("gzip", 3))
+            print(f"Saving dataset ...")
+            joblib.dump(ldccset, f"model/ldccset.gz", compress=("gzip", 3))
+
             print(tokener.__class__.__name__,
                   "Done.", file=sys.stderr)
