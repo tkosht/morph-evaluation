@@ -175,6 +175,13 @@ class JpTokenizerJanome(JpTokenizer):
             sentence.append(token.base_form)
         return sentence
 
+    def __getstate__(self):
+        state = {}
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
 
 class JpTokenizerSudachi(JpTokenizer):
     def __init__(self):
