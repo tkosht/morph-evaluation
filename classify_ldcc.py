@@ -316,8 +316,8 @@ if __name__ == '__main__':
     tokenizers = []
     if MeCab is not None:
         tokenizers.append(JpTokenizerMeCab())
-    if janome is not None:
-        tokenizers.append(JpTokenizerJanome())
+#     if janome is not None:
+#         tokenizers.append(JpTokenizerJanome())
 #     if sudachipy is not None:
 #         tokenizers.append(JpTokenizerSudachi())
 #     if nagisa is not None:
