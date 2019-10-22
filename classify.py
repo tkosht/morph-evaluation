@@ -1,5 +1,5 @@
-import numpy
 import pathlib
+from datetime import datetime
 
 try:
     import MeCab
@@ -31,75 +31,6 @@ except Exception:
     spm = None
 
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
-
-
-class DocRecord(object):
-    def __init__(self, fname, doc, label):
-        self.fname = fname
-        self.doc = doc    # may be an array of lines
-        self.label = label
-
-
-class DatasetLdcc(object):
-    def __init__(self, seed=777):
-        self.ldccdir = "data/ldcc/text"
-        self.rs = numpy.random.RandomState(seed)
-        self.dataset = []
-        self.labelset = set()
-        self.train = None
-        self.valid = None
-
-    def load(self):
-        docs = []
-        labelset = set()
-        ldcc_p = pathlib.Path(self.ldccdir)
-        for d in sorted(ldcc_p.glob("[a-z]*")):
-            labeldir = pathlib.Path(d)
-            label = labeldir.name
-            labelset.add(label)
-            txt_list = labeldir.glob("*-*.txt")
-            for txt in sorted(txt_list):
-                lines = self._load_lines(txt)
-                drec = DocRecord(txt, lines, label)
-                docs.append(drec)
-        self.dataset = numpy.array(docs)
-        self.labelset = labelset
-        return self
-
-    def _load_lines(self, txt):
-        with open(txt, "r", encoding="UTF-8") as f:
-            lines = f.readlines()[2:]
-        return lines
-
-    def shuffle(self):
-        n = len(self.dataset)
-        shuffled = self.rs.permutation(range(n))
-        self.dataset = self.dataset[shuffled]
-        self.train = self.valid = None
-        return self
-
-    def split(self, rate=0.7):
-        n = len(self.dataset)
-        self.n_train = int(n * rate)
-        self.n_valid = n - self.n_train
-        self.train = self.dataset[:self.n_train]
-        self.valid = self.dataset[self.n_train:]
-        return self
-
-    def get_data(self, with_split=False):
-        if with_split:
-            assert self.train is not None
-            assert self.valid is not None
-            return [dr.doc for dr in self.train], [dr.doc for dr in self.valid]
-        return [dr.doc for dr in self.dataset]
-
-    def get_labels(self, with_split=False):
-        if with_split:
-            assert self.train is not None
-            assert self.valid is not None
-            return ([dr.label for dr in self.train],
-                    [dr.label for dr in self.valid])
-        return [dr.label for dr in self.dataset]
 
 
 class Transer(object):
@@ -300,19 +231,91 @@ def ident_tokener(sentence):
     return sentence
 
 
+def build_pipleline(tokener):
+    embedders = [
+        ("pca", PCA(n_components=32)),
+        ("identity", Transer()),    # means tfidf to tfidf
+    ]
+
+    tfidf = TfidfVectorizer(
+                tokenizer=ident_tokener,
+                lowercase=False
+                )
+    lgbmclf = lightgbm.LGBMClassifier(
+                objective="softmax",
+                num_class=len(dataset.labelset),
+                importance_type="gain",
+                )
+    pipe = Pipeline(steps=[
+        ("tokenizer", tokener),
+        ("vectorizer", tfidf),
+        ("to_dence", SparsetoDense()),
+        ("embedder", FeatureUnion(embedders)),
+        ("classifier", lgbmclf),
+    ])
+
+    return pipe
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description='VAE MNIST Example')
+    parser.add_argument('--dataset',
+                        choices=['ldcc', 'aozora'],
+                        default="aozora",
+                        help='string for the dataset name (default: "aozora")')
+    parser.add_argument('--iter',
+                        type=int,
+                        default=3,
+                        help='positive integer of the iteration '
+                             'for train and validation (default: 10)')
+    args = parser.parse_args()
+    return args
+
+
+def get_now():
+    return datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+
+
+def print_log(*params):
+    print(get_now(), *params)
+
+
 if __name__ == '__main__':
     import sys
     import time
+    import argparse
     import lightgbm
+    import joblib
     from sklearn.pipeline import Pipeline, FeatureUnion
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.decomposition import PCA   # , KernelPCA
     from sklearn.metrics import accuracy_score
-    import joblib
+    from ldccset import DatasetLdcc
+    from aozoraset import DatasetAozora
 
-    ldccset = DatasetLdcc()
-    ldccset.load()
+    args = get_args()
 
+    # load dataset
+    data_file = f"model/{args.dataset}set.gz"
+    if pathlib.Path(data_file).exists():
+        dataset = joblib.load(data_file)
+    else:
+        print_log(f"loading dataset {args.dataset} ...")
+        dataset_class_dic = dict(
+            ldcc=DatasetLdcc,
+            aozora=DatasetAozora,
+            )
+
+        dataset_class = dataset_class_dic[args.dataset]
+        dataset = dataset_class()
+        dataset.load()
+        print_log(f"loading dataset {args.dataset} ... Done.")
+
+        print(f"Saving dataset ... [{data_file}]")
+        pathlib.Path("./model").mkdir(parents=True, exist_ok=True)
+        joblib.dump(dataset, data_file, compress=("gzip", 3))
+
+    # setup tokenizers
     tokenizers = []
     if MeCab is not None:
         tokenizers.append(JpTokenizerMeCab())
@@ -325,37 +328,18 @@ if __name__ == '__main__':
     if spm is not None:
         tokenizers.append(JpTokenizerSentencePiece(vocab_size=5000))
 
+    # loop to train and validation
     print("tokenizer, train_acc, valid_acc, elapsed_time, cpu_time")
-    for _ in range(10):
-        ldccset.shuffle().split()
-        X_train, X_valid = ldccset.get_data(with_split=True)
-        y_train, y_valid = ldccset.get_labels(with_split=True)
+    for _ in range(args.iter):
+        dataset.shuffle().split()
+        X_train, X_valid = dataset.get_data(do_split=True)
+        y_train, y_valid = dataset.get_labels(do_split=True)
 
         for tokener in tokenizers:
             print(tokener.__class__.__name__,
                   "Processing ...", file=sys.stderr)
 
-            embedders = [
-                ("pca", PCA(n_components=32)),
-                ("identity", Transer()),    # means tfidf to tfidf
-            ]
-
-            tfidf = TfidfVectorizer(
-                        tokenizer=ident_tokener,
-                        lowercase=False
-                        )
-            lgbmclf = lightgbm.LGBMClassifier(
-                        objective="softmax",
-                        num_class=len(ldccset.labelset),
-                        importance_type="gain",
-                        )
-            pipe = Pipeline(steps=[
-                ("tokenizer", tokener),
-                ("vectorizer", tfidf),
-                ("to_dence", SparsetoDense()),
-                ("embedder", FeatureUnion(embedders)),
-                ("classifier", lgbmclf),
-            ])
+            pipe = build_pipleline(tokener)
 
             tps = time.perf_counter()
             tcs = time.process_time()
@@ -381,13 +365,13 @@ if __name__ == '__main__':
                   f"{elapsed_time}, {cpu_time}")
 
             # save model
-            pathlib.Path("./model").mkdir(parents=True, exist_ok=True)
-            print(f"Saving model {tokener.__class__.__name__.lower()} ...")
+            print(f"Saving model for {tokener.__class__.__name__.lower()} ...")
             pipe_file = f"model/pipe-{tokener.__class__.__name__.lower()}.gz"
             joblib.dump(pipe, pipe_file, compress=("gzip", 3))
-            # joblib.dump(pipe, f"model/pipe.gz", compress=("gzip", 3))
-            print(f"Saving dataset ...")
-            joblib.dump(ldccset, f"model/ldccset.gz", compress=("gzip", 3))
+
+            data_file = f"model/{args.dataset}set.gz"
+            print(f"Saving dataset ... [{data_file}]")
+            joblib.dump(dataset, data_file, compress=("gzip", 3))
 
             print(tokener.__class__.__name__,
                   "Done.", file=sys.stderr)
