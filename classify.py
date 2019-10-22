@@ -231,26 +231,68 @@ def ident_tokener(sentence):
     return sentence
 
 
-def build_pipleline(tokener):
+def build_pipleline_simple(tokener):
+    tfidf = TfidfVectorizer(
+                tokenizer=ident_tokener,
+                lowercase=False
+                )
+
     embedders = [
         ("pca", PCA(n_components=32)),
         ("identity", Transer()),    # means tfidf to tfidf
     ]
 
-    tfidf = TfidfVectorizer(
-                tokenizer=ident_tokener,
-                lowercase=False
-                )
     lgbmclf = lightgbm.LGBMClassifier(
                 objective="softmax",
                 num_class=len(dataset.labelset),
                 importance_type="gain",
                 )
+
     pipe = Pipeline(steps=[
         ("tokenizer", tokener),
         ("vectorizer", tfidf),
         ("to_dence", SparsetoDense()),
         ("embedder", FeatureUnion(embedders)),
+        ("classifier", lgbmclf),
+    ])
+
+    return pipe
+
+
+def build_pipleline_with_doc2vec(tokener):
+    tfidf = TfidfVectorizer(
+                tokenizer=ident_tokener,
+                lowercase=False
+                )
+
+    embedders = [
+        ("pca", PCA(n_components=32)),
+        ("identity", Transer()),    # means tfidf to tfidf
+    ]
+
+    pipe_embedder_1 = Pipeline(steps=[
+        ("vectorizer", tfidf),
+        ("to_dence", SparsetoDense()),
+        ("embedder", FeatureUnion(embedders)),
+    ])
+    pipe_embedder_2 = Pipeline(steps = [
+        ("doctagger", TagDocMaker()),
+        ("doc2vec", Doc2Vectorizer(n_components=128, min_count=1)),
+    ])
+    pipe_embeds = [
+        ("pipe1", pipe_embedder_1),
+        ("pipe2", pipe_embedder_2),
+        ]
+
+    lgbmclf = lightgbm.LGBMClassifier(
+                objective="softmax",
+                num_class=len(dataset.labelset),
+                importance_type="gain",
+                )
+
+    pipe = Pipeline(steps=[
+        ("tokenizer", tokener),
+        ("embedders", FeatureUnion(pipe_embeds)),
         ("classifier", lgbmclf),
     ])
 
@@ -339,6 +381,8 @@ if __name__ == '__main__':
             print(tokener.__class__.__name__,
                   "Processing ...", file=sys.stderr)
 
+            build_pipleline = build_pipleline_simple
+            # build_pipleline = build_pipleline_with_doc2vec
             pipe = build_pipleline(tokener)
 
             tps = time.perf_counter()
@@ -364,14 +408,14 @@ if __name__ == '__main__':
                   f"{train_acc}, {valid_acc}, "
                   f"{elapsed_time}, {cpu_time}")
 
-            # save model
-            print(f"Saving model for {tokener.__class__.__name__.lower()} ...")
-            pipe_file = f"model/pipe-{tokener.__class__.__name__.lower()}.gz"
-            joblib.dump(pipe, pipe_file, compress=("gzip", 3))
+        # save model
+        print(f"Saving model for {tokener.__class__.__name__.lower()} ...")
+        pipe_file = f"model/pipe-{tokener.__class__.__name__.lower()}.gz"
+        joblib.dump(pipe, pipe_file, compress=("gzip", 3))
 
-            data_file = f"model/{args.dataset}set.gz"
-            print(f"Saving dataset ... [{data_file}]")
-            joblib.dump(dataset, data_file, compress=("gzip", 3))
+        data_file = f"model/{args.dataset}set.gz"
+        print(f"Saving dataset ... [{data_file}]")
+        joblib.dump(dataset, data_file, compress=("gzip", 3))
 
-            print(tokener.__class__.__name__,
-                  "Done.", file=sys.stderr)
+        print(tokener.__class__.__name__,
+              "Done.", file=sys.stderr)
