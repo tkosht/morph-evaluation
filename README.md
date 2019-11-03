@@ -6,7 +6,7 @@ so just commented out them.
 
 The using datasets in japenese are the `ldcc`
 ([libdoor news corpus](https://www.rondhuit.com/download.html)) dataset
-and the `aozora` dataset.
+and the `aozora` ([青空文庫形態素解析データ集](http://aozora-word.hahasoha.net/download.html)) dataset.
 
 The evaluation task is classification task:
 - 5 categories (filtered by program) in the `aozora` dataset
