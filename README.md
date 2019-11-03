@@ -12,7 +12,7 @@ The evaluation task is classification task:
 - 5 categories (filtered by program) in the `aozora` dataset
 - 9 categories in the `ldcc` dataset
 
-you can view the evaluation result and a simple analysis in the file `notebook/report-evaluation.ipynb`, please check it out.
+you can view the evaluation result and a simple analysis in the [notebook](notebook/report-evaluation.ipynb), please check it out.
 
 
 ---
