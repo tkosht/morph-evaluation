@@ -42,7 +42,7 @@ bin/install_sudachidic.sh
 ---
 
 # preparation
-if you want to use ldcc dataset, download it
+if you want to use `ldcc` dataset, download it
 
 ```bash
 sh bin/dl.sh
