@@ -31,8 +31,8 @@ class DatasetLdcc(object):
 
     def _load_lines(self, txt):
         with open(txt, "r", encoding="UTF-8") as f:
-            lines = f.readlines()[2:]
-        return lines
+            lines = f.readlines()[2:]   # skip first line as url
+        return [l.rstrip() for l in lines]
 
     def shuffle(self):
         n = len(self.dataset)
